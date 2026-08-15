@@ -22,6 +22,24 @@ from pageindex_client import PageIndexClient, PageIndexError
 # that could touch the Streamlit runtime (st.secrets included).
 st.set_page_config(page_title="Vectorless RAG — Umicore", page_icon="📑", layout="wide")
 
+# This machine has two Pythons: 3.10 (Streamlit 1.26, what the bare `streamlit`
+# command resolves to) and 3.14 (Streamlit 1.58). On 1.26 this app dies with a
+# bare "module 'streamlit' has no attribute 'write_stream'". Fail loudly instead.
+MIN_STREAMLIT = (1, 31)  # st.write_stream landed in 1.31
+_running = tuple(int(part) for part in st.__version__.split(".")[:2])
+if _running < MIN_STREAMLIT:
+    import sys
+
+    st.error(
+        f"**Streamlit {st.__version__} is too old** (need "
+        f"{'.'.join(map(str, MIN_STREAMLIT))}+ for `st.write_stream`).\n\n"
+        f"Running under: `{sys.executable}`\n\n"
+        "You are launching via the bare `streamlit` command, which resolves to "
+        "an older Python. Stop this and start it with:\n\n"
+        "```\npython -m streamlit run app.py\n```"
+    )
+    st.stop()
+
 load_dotenv()
 
 
@@ -251,12 +269,16 @@ st.session_state["doc_id"] = selected_doc_id
 # tabs
 # --------------------------------------------------------------------------
 
-tab_index, tab_tree, tab_ask = st.tabs(
-    ["1 · Index", "2 · Inspect tree", "3 · Ask"]
-)
+# NOT st.tabs(): every widget interaction reruns the script and st.tabs resets
+# to the first tab, so typing a question bounced you back to Index and the answer
+# rendered into a tab you could no longer see. A radio keyed into session_state
+# survives reruns, so the view stays where you put it.
+SECTIONS = ["1 · Index", "2 · Inspect tree", "3 · Ask"]
+section = st.sidebar.radio("Section", SECTIONS, index=2, key="section")
+st.sidebar.divider()
 
 # ---- 1. index ------------------------------------------------------------
-with tab_index:
+if section == SECTIONS[0]:
     st.header("Submit a PDF to PageIndex")
     st.write(
         "PageIndex parses the PDF into a hierarchical tree of sections. "
@@ -361,7 +383,7 @@ with tab_index:
                 st.error(str(exc))
 
 # ---- 2. tree -------------------------------------------------------------
-with tab_tree:
+elif section == SECTIONS[1]:
     st.header("The document tree")
     doc_id = st.session_state.get("doc_id")
     if not doc_id:
@@ -415,7 +437,7 @@ with tab_tree:
                 st.json(roots, expanded=False)
 
 # ---- 3. ask --------------------------------------------------------------
-with tab_ask:
+else:  # SECTIONS[2] - Ask
     st.header("Ask a question")
     doc_id = st.session_state.get("doc_id")
     if not doc_id:
@@ -427,40 +449,83 @@ with tab_ask:
             "Retrieval = an LLM reads the tree and picks node ids. "
             "Generation = a second call reads only those sections."
         )
+        # Selectbox stays OUTSIDE the form so picking a sample immediately
+        # prefills the question box.
         sample = st.selectbox(
             "Multi-section starter questions",
             ["—"] + pipeline.SAMPLE_MULTIHOP_QUERIES,
         )
         default_q = "" if sample == "—" else sample
-        query = st.text_area("Question", value=default_q, height=110)
 
-        if st.button("Run", type="primary", disabled=not query.strip()):
+        # A form is what makes the button work on the FIRST click. A bare
+        # st.text_area only commits its value on Ctrl+Enter, so a plain button
+        # stayed disabled until you knew that trick. Submitting a form commits
+        # every widget inside it in the same interaction.
+        with st.form("ask_form"):
+            query = st.text_area("Question", value=default_q, height=110)
+            run = st.form_submit_button("Run", type="primary")
+
+        if run and not query.strip():
+            st.warning("Type a question first.")
+            run = False
+
+        if run:
             roots = load_roots(doc_id)
-            if not roots:
-                st.stop()
-            openai_client = generation.get_openai_client()
+            if roots:
+                openai_client = generation.get_openai_client()
+                with st.status("Reasoning over the tree…", expanded=False) as status:
+                    result = pipeline.retrieve(
+                        query,
+                        roots,
+                        openai_client,
+                        search_model=search_model,
+                        max_nodes=max_nodes,
+                        char_budget=char_budget,
+                    )
+                    status.update(
+                        label=f"Selected {len(result['sources'])} section(s)",
+                        state="complete",
+                    )
 
-            with st.status("Reasoning over the tree…", expanded=False) as status:
-                result = pipeline.retrieve(
-                    query,
-                    roots,
-                    openai_client,
-                    search_model=search_model,
-                    max_nodes=max_nodes,
-                    char_budget=char_budget,
+                st.subheader("Answer")
+                # write_stream returns the full text once the stream finishes
+                answer_text = st.write_stream(
+                    generation.answer_stream(
+                        query,
+                        result["context"],
+                        client=openai_client,
+                        model=answer_model,
+                        doc_label=DEFAULT_PDF,
+                    )
                 )
-                status.update(
-                    label=f"Selected {len(result['sources'])} section(s)", state="complete"
-                )
+                # Persist so the answer survives the next rerun. Without this the
+                # whole result vanishes the moment any widget is touched.
+                st.session_state["last_run"] = {
+                    "query": query,
+                    "doc_id": doc_id,
+                    "search_model": search_model,
+                    "answer_model": answer_model,
+                    "result": result,
+                    "answer": answer_text,
+                }
 
-            if result["thinking"]:
-                with st.expander("Tree-search reasoning", expanded=True):
+        last = st.session_state.get("last_run")
+        if last:
+            if not run:
+                # Re-render the stored answer on plain reruns.
+                st.subheader("Answer")
+                st.markdown(last["answer"])
+                st.caption(f"Question: {last['query']}")
+
+            result = last["result"]
+            st.divider()
+            if result.get("thinking"):
+                with st.expander("Tree-search reasoning", expanded=False):
                     st.write(result["thinking"])
 
             st.subheader("Retrieved sections")
             if not result["sources"]:
                 st.error("No sections selected — try rephrasing the question.")
-                st.stop()
             for src in result["sources"]:
                 conf = src.get("confidence")
                 header = (
@@ -476,26 +541,16 @@ with tab_ask:
                 st.caption(f"Ignored ids not in the tree: {result['hallucinated_ids']}")
             st.caption(f"Context assembled: {len(result['context']):,} chars")
 
-            st.subheader("Answer")
-            st.write_stream(
-                generation.answer_stream(
-                    query,
-                    result["context"],
-                    client=openai_client,
-                    model=answer_model,
-                    doc_label=DEFAULT_PDF,
-                )
-            )
-
             st.download_button(
                 "Download retrieval trace (JSON)",
                 json.dumps(
                     {
-                        "doc_id": doc_id,
-                        "query": query,
-                        "search_model": search_model,
-                        "answer_model": answer_model,
-                        "thinking": result["thinking"],
+                        "doc_id": last["doc_id"],
+                        "query": last["query"],
+                        "search_model": last["search_model"],
+                        "answer_model": last["answer_model"],
+                        "thinking": result.get("thinking", ""),
+                        "answer": last["answer"],
                         "sources": [
                             {k: v for k, v in s.items() if k != "text"}
                             for s in result["sources"]
