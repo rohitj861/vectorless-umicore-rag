@@ -1,0 +1,23 @@
+# --- secrets: never commit ------------------------------------------------
+.env
+.streamlit/secrets.toml
+
+# --- python ---------------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- source PDFs ----------------------------------------------------------
+# Not needed at runtime: the parsed tree is committed under cache/, so the
+# deployed app never opens the PDF. Keeps the repo ~21 MB lighter. Drop the
+# annual report back in here if you want to re-run trim_pdf.py or re-index.
+*.pdf
+
+# --- cache ----------------------------------------------------------------
+# The document tree IS committed so the deployed app works without re-indexing
+# (it is ~1.1 MB and contains only the public annual report's text).
+# Ignore everything else that lands in cache/, e.g. uploaded PDFs.
+cache/*
+!cache/documents.json
+!cache/*.tree.json
