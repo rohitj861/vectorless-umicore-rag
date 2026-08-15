@@ -27,6 +27,8 @@ PDF ──POST /doc/──▶ doc_id ──GET /doc/{id}?type=tree──▶ sect
 pip install -r requirements.txt
 ```
 
+Requires **Python 3.11+** and **Streamlit 1.31+** (`st.write_stream`). See the warning under [Run](#run) if you have more than one Python installed.
+
 Then open `.env` and paste your two keys:
 
 ```ini
@@ -65,10 +67,16 @@ Everything analytical survives: all segment reviews, the full financial
 statements with notes F1–F43, the auditor's report, governance, the remuneration
 report, principal risks and the ESRS sustainability statements.
 
-**Page numbers shift.** Content after original p6 sits 6 pages earlier in the
-trimmed file, so a citation reading "p. 56" corresponds to p. 62 of the
-published report. Raising the cap (Standard plan: $30/mo, 10,000 active pages)
-removes both the trimming and the offset.
+**Page numbers shift — and are corrected automatically.** Trimming drops 5 pages
+before original p7, so everything after it sits 5 pages earlier in the indexed
+file. `PAGEINDEX_PAGE_OFFSET=5` adds that back, so **every page the app cites is
+the page in your published 220-page PDF**, not the trimmed one. Verified against
+the original's bookmarks: F18 Impairment is indexed at p97 and cited as p102,
+which is where it actually sits.
+
+Set `PAGEINDEX_PAGE_OFFSET=0` if you ever index the full untrimmed report
+(Standard plan: $30/mo, 10,000 active pages), which removes both the trimming
+and the offset.
 
 ### Model choice
 
@@ -82,26 +90,71 @@ Two models, set independently in `.env`:
 Both are overridable live in the Streamlit sidebar, so you can A/B them without
 editing `.env`.
 
+### All settings
+
+Every setting lives in `.env` (see `.env.example`). Defaults in brackets.
+
+| Variable | Purpose |
+| --- | --- |
+| `PAGEINDEX_API_KEY` | PageIndex key. Required. |
+| `OPENAI_API_KEY` | OpenAI key. Required. |
+| `PAGEINDEX_BASE_URL` | PageIndex API root [`https://api.pageindex.ai`]. |
+| `PAGEINDEX_SEARCH_MODEL` | Model that picks node ids [`gpt-4.1-mini`]. |
+| `PAGEINDEX_ANSWER_MODEL` | Model that writes the answer [`gpt-4.1`]. |
+| `PAGEINDEX_DOC_ID` | Pre-selected document for the app. |
+| `PAGEINDEX_DEFAULT_PDF` | PDF the CLI scripts use when none is given. |
+| `PAGEINDEX_CACHE_DIR` | Where trees and the `doc_id` registry live [`cache`]. |
+| `PAGEINDEX_PAGE_OFFSET` | Added to every cited page so citations match the published report [`0`; **`5` here**]. |
+| `PAGEINDEX_OUTLINE_CHAR_BUDGET` | Max outline chars shown to the search model [`120000`]. The full Umicore outline with summaries is ~79k, so all node summaries stay visible; lower it for small-context models. |
+| `PAGEINDEX_CONTEXT_CHAR_BUDGET` | Max node text sent to the answer model [`90000`], split evenly across selected nodes. |
+| `PAGEINDEX_ALLOW_UPLOAD` | `false` disables indexing in the UI [`true`]. |
+| `APP_PASSWORD` | Optional password gate. Unset = no gate. |
+
 ## Run
 
 ### The app (this is the main deliverable)
 
+Double-click **`run_app.bat`**, or:
+
 ```powershell
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
-Three tabs, matching the three stages:
+Then open <http://localhost:8501>.
 
-1. **Index** — submit `Umicore Annual Report 2025.pdf`, get the `doc_id`, watch
-   the processing status until the tree is ready. The tree is cached in
-   `cache/<doc_id>.tree.json`, so this is a one-time cost per document.
+> ### ⚠️ Do NOT use `streamlit run app.py`
+>
+> This machine has two Python installations, and the bare `streamlit` command
+> resolves to the wrong one:
+>
+> | Command | Python | Streamlit | Works? |
+> | --- | --- | --- | --- |
+> | `streamlit run app.py` | 3.10 | 1.26.0 | ❌ no `st.write_stream` |
+> | `python -m streamlit run app.py` | 3.14 | 1.58.0 | ✅ |
+>
+> On 1.26 retrieval runs (spending API credits) and then generation dies with
+> `AttributeError: module 'streamlit' has no attribute 'write_stream'`.
+> `app.py` now checks the version at startup and says so in plain language
+> rather than failing cryptically. Minimum required: **Streamlit 1.31**.
+
+Pick a **Section** in the sidebar — the app opens on *Ask*:
+
+1. **Index** — submit a PDF, get the `doc_id`, watch processing until the tree
+   is ready. The tree is cached in `cache/<doc_id>.tree.json`, so this is a
+   one-time cost per document. Set `PAGEINDEX_ALLOW_UPLOAD=false` to disable it.
 2. **Inspect tree** — node/depth/page statistics, an expandable tree with each
-   node's summary and raw text, a flat outline view at any depth, and the raw
-   JSON.
-3. **Ask** — type a question (or pick one of the built-in multi-section
-   starters). You see the tree-search reasoning, exactly which nodes were
-   selected and why, the text pulled from each, then the streamed answer. The
+   node's summary and raw text, a flat outline view at any depth, and raw JSON.
+3. **Ask** — type a question (or pick a built-in multi-section starter) and hit
+   **Run**. You get the answer first, then the tree-search reasoning, exactly
+   which nodes were selected and why, and the text pulled from each. The
    retrieval trace is downloadable as JSON.
+
+Two Streamlit behaviours the UI works around, both of which made it look broken:
+`st.tabs` resets to the first tab on every rerun (so the answer rendered into a
+tab you could no longer see) — replaced with a sidebar radio held in
+`session_state`. And `st.text_area` only commits its value on Ctrl+Enter (so the
+Run button stayed disabled on a first click) — the question and button now live
+in an `st.form`, which commits everything on submit.
 
 ### Or from the command line
 
@@ -115,43 +168,46 @@ python ask.py --sample 0              # run a multi-hop question end to end
 python ask.py "What drove the 2025 impairment?" --show-context
 ```
 
-## Deploying to Streamlit Community Cloud
+## Deployment
 
-The app reads config from `.env` locally and from `st.secrets` on Cloud —
-`bridge_secrets()` in `app.py` copies Cloud secrets into `os.environ` at
-startup, so every module keeps using plain `os.getenv` and nothing else changes.
+**This project runs locally only.** The server binds to `127.0.0.1`, so nothing
+on your network or the internet can reach it. That is deliberate: every query
+spends your OpenAI credits, and an open URL means strangers spending them.
 
-What ships in the repo: the code, and `cache/<doc_id>.tree.json` (~1.1 MB) so the
-deployed app queries the already-indexed document without re-parsing anything.
-What never ships: `.env`, `.streamlit/secrets.toml`, and the PDFs (unused at
-runtime — the tree is enough).
+Cloud deployment was prepared and then abandoned. The scaffolding is still in
+the repo and is harmless — it is inert locally — so it is documented here in
+case you want it later.
 
-1. Push the repo to GitHub (private repo → private app by default).
-2. Go to [share.streamlit.io](https://share.streamlit.io) → **Create app** →
-   pick the repo, branch `main`, main file `app.py`.
-3. Open **Advanced settings → Secrets** and paste the contents of
-   `.streamlit/secrets.toml.example` with your real keys filled in.
-4. Deploy. First boot installs `requirements.txt` and takes a couple of minutes.
-5. **Set the viewer allowlist**: app → **Share** → "Only specific people can view
-   this app" → add the email addresses that should have access.
+<details>
+<summary>Optional: deploying to Streamlit Community Cloud</summary>
 
-### Cost and exposure on a shared deployment
+`bridge_secrets()` in `app.py` copies `st.secrets` into `os.environ` at startup,
+so the same code reads `.env` locally and Cloud secrets when deployed. It checks
+for a `secrets.toml` first — touching `st.secrets` when none exists makes
+Streamlit render an error into the page.
 
-Every visitor who can open the app spends *your* OpenAI credits, and every
-upload spends *your* PageIndex credits and page allowance. Two controls:
+Steps: push to GitHub → [share.streamlit.io](https://share.streamlit.io) →
+**Create app** → repo, branch `main`, main file `app.py` → **Advanced settings →
+Secrets**, paste `.streamlit/secrets.toml.example` with real keys → Deploy.
+
+**Community Cloud only deploys _public_ apps from GitHub.** Private apps route to
+a paid Snowflake trial. Streamlit's own docs still describe a free private-app
+viewer allowlist; that is out of date. A private repo keeps your *code* private,
+but the *app* is reachable by anyone with the URL.
+
+Two controls for a shared instance:
 
 | Secret | Effect |
 | --- | --- |
-| `PAGEINDEX_ALLOW_UPLOAD = "false"` | Disables the Index tab's submit and upload actions. Set this on any shared instance — it protects the 200-page cap. |
-| `APP_PASSWORD` | Optional shared-password gate before the app renders. A deterrent, not real auth; prefer the viewer allowlist. |
+| `PAGEINDEX_ALLOW_UPLOAD = "false"` | Disables the Index section's submit and upload actions — protects your PageIndex credits and the 200-page cap. |
+| `APP_PASSWORD` | Password gate before the app renders. A deterrent, not real authentication. |
 
-Streamlit Community Cloud allows **one private app at a time**. If you already
-have one, either make it public or delete it before deploying this.
+</details>
 
 ## How retrieval works
 
 `retrieval.select_nodes()` renders the tree as an indented outline
-(`- [node_id] Title (p30-36)` plus summaries) and asks the search model which
+(`- [node_id] Title (p102, 3.3k chars)` plus summaries) and asks the search model which
 nodes are needed. The system prompt is tuned for financial documents: it is told
 that questions are often multi-hop, that the *figure* lives in the statements or
 notes while the *explanation* lives in the management commentary, and that it
@@ -199,7 +255,8 @@ Guards that keep it honest on a 220-page report:
 | `corrections.py` | Verified repairs to extraction errors in node text (see below) |
 | `check_setup.py` | Validates `.env` and live-tests both API keys |
 | `trim_pdf.py` | Builds a 200-page copy to fit the Free Trial page cap |
-| `app.py` | Streamlit UI |
+| `app.py` | Streamlit UI (sidebar sections, form-based Ask, version guard) |
+| `run_app.bat` | Launches the app with the correct Python — use this |
 | `cache/` | `documents.json` (filename → doc_id) and `<doc_id>.tree.json` |
 
 ## Extraction corrections
