@@ -18,7 +18,25 @@ import pipeline
 import retrieval
 from pageindex_client import PageIndexClient, PageIndexError
 
+# set_page_config MUST be the first Streamlit command executed, before anything
+# that could touch the Streamlit runtime (st.secrets included).
+st.set_page_config(page_title="Vectorless RAG — Umicore", page_icon="📑", layout="wide")
+
 load_dotenv()
+
+
+def secrets_file_exists() -> bool:
+    """True if a secrets.toml is present in either location Streamlit reads.
+
+    Touching `st.secrets` when no secrets file exists makes Streamlit render a
+    "No secrets files found" error into the page - catching the exception is not
+    enough, the message is already on screen. So we check for the file first and
+    never touch st.secrets locally.
+    """
+    return any(
+        (base / ".streamlit" / "secrets.toml").exists()
+        for base in (Path.cwd(), Path.home())
+    )
 
 
 def bridge_secrets() -> None:
@@ -30,6 +48,8 @@ def bridge_secrets() -> None:
     bridge once at startup and the rest of the codebase is unchanged.
     `.env` wins when both exist, so local runs behave exactly as before.
     """
+    if not secrets_file_exists():
+        return
     keys = (
         "PAGEINDEX_API_KEY",
         "PAGEINDEX_BASE_URL",
@@ -56,8 +76,6 @@ def bridge_secrets() -> None:
 
 
 bridge_secrets()
-
-st.set_page_config(page_title="Vectorless RAG — Umicore", page_icon="📑", layout="wide")
 
 DEFAULT_PDF = os.getenv("PAGEINDEX_DEFAULT_PDF", "Umicore Annual Report 2025.pdf")
 
@@ -140,6 +158,38 @@ def known_docs(client: PageIndexClient) -> dict[str, str]:
     return docs
 
 
+def _render_node_body(node: dict, depth: int) -> None:
+    """Summary + text + descendants, WITHOUT opening another expander.
+
+    Streamlit forbids nesting an expander inside an expander, and this tree is
+    4 levels deep. So only the top level gets an expander; everything below is
+    rendered as indented sections inside it.
+    """
+    node_id = str(node.get("node_id", "?"))
+    summary = retrieval.node_summary(node)
+    if summary:
+        st.caption(summary)
+    text = retrieval.node_text(node)
+    if text:
+        st.text_area(
+            f"[{node_id}] text · {len(text):,} chars",
+            text[:20000],
+            height=180,
+            key=f"txt-{node_id}",
+            disabled=True,
+        )
+    for child in retrieval.children(node):
+        child_id = str(child.get("node_id", "?"))
+        child_title = str(child.get("title", "(untitled)")).strip() or "(untitled)"
+        indent = "&nbsp;" * 4 * (depth + 1)
+        st.markdown(
+            f"{indent}<code>{child_id}</code> <b>{child_title}</b> "
+            f"<small>· {retrieval.page_label(child)} · {retrieval.size_label(child)}</small>",
+            unsafe_allow_html=True,
+        )
+        _render_node_body(child, depth + 1)
+
+
 def render_tree_node(node: dict, depth: int = 0) -> None:
     title = str(node.get("title", "(untitled)")).strip() or "(untitled)"
     node_id = node.get("node_id", "?")
@@ -148,20 +198,7 @@ def render_tree_node(node: dict, depth: int = 0) -> None:
     if kids:
         label += f"  ·  {len(kids)} sub"
     with st.expander(label, expanded=False):
-        summary = retrieval.node_summary(node)
-        if summary:
-            st.caption(summary)
-        text = retrieval.node_text(node)
-        if text:
-            st.text_area(
-                f"text · {len(text):,} chars",
-                text[:20000],
-                height=200,
-                key=f"txt-{node_id}-{depth}",
-                disabled=True,
-            )
-        for child in kids:
-            render_tree_node(child, depth + 1)
+        _render_node_body(node, depth)
 
 
 # --------------------------------------------------------------------------
