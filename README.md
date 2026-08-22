@@ -200,7 +200,7 @@ state with nothing to re-index.
 | Build command | `pip install -r requirements.txt` |
 | Start command | `streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false` |
 | Plan / region | Free / Singapore |
-| Auto-deploy | On — every push to `main` redeploys |
+| Auto-deploy | On — every push to `main` redeploys. Requires the Render GitHub App to be installed on the repo: a service created from a plain public repo URL clones fine but gets no webhook, so pushes silently never deploy. Connect it under **New Web Service → GitHub → Connect account**. |
 
 Streamlit must bind `0.0.0.0` on Render's `$PORT`; the default `127.0.0.1` is
 unreachable from outside the container. `--server.headless true` stops it
