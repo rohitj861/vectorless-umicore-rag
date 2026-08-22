@@ -1,5 +1,14 @@
-streamlit>=1.36
-openai>=1.40
-requests>=2.31
-python-dotenv>=1.0
-pypdf>=4.0        # trim_pdf.py only; unused by the app
+# Pinned to the versions the Render deploy of 2026-08-22 installed and ran.
+#
+# These were previously open ranges, so production and local development drifted
+# apart: `openai>=1.40` resolved to 3.3.1 on Render, two major versions above
+# what the code was written against. It works, but an unpinned redeploy could
+# pick up a breaking release at any time, with no code change to blame.
+#
+# Transitive dependencies are deliberately left unpinned so pip can resolve
+# platform-appropriate wheels (production is Linux, development is Windows).
+streamlit==1.62.0
+openai==3.3.1
+requests==2.34.2
+python-dotenv==1.2.3
+pypdf==6.16.1          # trim_pdf.py only; unused by the app
