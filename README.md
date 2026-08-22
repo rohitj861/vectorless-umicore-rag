@@ -184,16 +184,38 @@ python ask.py "What drove the 2025 impairment?" --show-context
 
 ## Deployment
 
-**This project runs locally only.** The server binds to `127.0.0.1`, so nothing
-on your network or the internet can reach it. That is deliberate: every query
-spends your OpenAI credits, and an open URL means strangers spending them.
+Deployed on **Render**: <https://vectorless-umicore-rag.onrender.com>
 
-Cloud deployment was prepared and then abandoned. The scaffolding is still in
-the repo and is harmless — it is inert locally — so it is documented here in
-case you want it later.
+Every query spends your OpenAI credits, so the public URL sits behind the
+`APP_PASSWORD` gate and indexing is disabled (`PAGEINDEX_ALLOW_UPLOAD=false`).
+The deployed app never opens the PDF — `cache/documents.json` and the parsed
+`cache/pi-*.tree.json` are committed, so it boots straight into a queryable
+state with nothing to re-index.
+
+### Render configuration
+
+| Setting | Value |
+| --- | --- |
+| Runtime | Python |
+| Build command | `pip install -r requirements.txt` |
+| Start command | `streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false` |
+| Plan / region | Free / Singapore |
+| Auto-deploy | On — every push to `main` redeploys |
+
+Streamlit must bind `0.0.0.0` on Render's `$PORT`; the default `127.0.0.1` is
+unreachable from outside the container. `--server.headless true` stops it
+trying to open a browser on the box.
+
+Set the variables from the [All settings](#all-settings) table under
+**Environment** in the Render dashboard — `PAGEINDEX_API_KEY` and
+`OPENAI_API_KEY` at minimum, plus `PAGEINDEX_DROPPED_PAGES` (without it,
+citations silently fall back to the flat offset and come out wrong).
+
+On the free plan the service spins down after ~15 minutes idle, so the first
+request after a pause takes ~50s to wake.
 
 <details>
-<summary>Optional: deploying to Streamlit Community Cloud</summary>
+<summary>Alternative: deploying to Streamlit Community Cloud</summary>
 
 `bridge_secrets()` in `app.py` copies `st.secrets` into `os.environ` at startup,
 so the same code reads `.env` locally and Cloud secrets when deployed. It checks
