@@ -32,6 +32,10 @@ def main() -> int:
 
     query = args.query
     if args.sample is not None:
+        last = len(pipeline.SAMPLE_MULTIHOP_QUERIES) - 1
+        if not 0 <= args.sample <= last:
+            # Negative indices used to wrap silently and bill a real API call.
+            parser.error(f"--sample must be 0..{last}; see --list-samples")
         query = pipeline.SAMPLE_MULTIHOP_QUERIES[args.sample]
     if not query:
         parser.error("give a query, --sample N, or --list-samples")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 from typing import Any, Iterator
 
 # --------------------------------------------------------------------------
@@ -71,16 +72,70 @@ def node_summary(node: Node) -> str:
 
 
 def page_offset() -> int:
-    """Pages to add so citations match the ORIGINAL published report.
+    """Flat fallback shift, used only when no drop list is configured.
 
-    We index a trimmed PDF to fit the PageIndex Free Trial page cap, which
-    shifts every page. Set PAGEINDEX_PAGE_OFFSET so answers cite the real
-    report's page numbers instead of the trimmed file's.
+    Correct ONLY when every dropped page precedes all kept content. Prefer
+    PAGEINDEX_DROPPED_PAGES, which handles drops anywhere in the document.
     """
     try:
         return int(os.getenv("PAGEINDEX_PAGE_OFFSET", "0"))
     except (TypeError, ValueError):
         return 0
+
+
+def parse_page_ranges(raw: str) -> tuple[int, ...]:
+    """Parse "1-2,3,200-204" into a sorted tuple of 1-based page numbers."""
+    pages: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            if "-" in part:
+                first, _, last = part.partition("-")
+                pages.update(range(int(first), int(last) + 1))
+            else:
+                pages.add(int(part))
+        except ValueError:
+            # A malformed entry must not silently shift every citation.
+            raise ValueError(
+                f"PAGEINDEX_DROPPED_PAGES: cannot parse {part!r}. "
+                "Expected pages/ranges like '1-2,3,200-204'."
+            ) from None
+    return tuple(sorted(p for p in pages if p > 0))
+
+
+@lru_cache(maxsize=8)
+def _dropped_pages(raw: str) -> tuple[int, ...]:
+    return parse_page_ranges(raw)
+
+
+def dropped_pages() -> tuple[int, ...]:
+    """Original 1-based pages removed by trim_pdf.py, from the environment."""
+    return _dropped_pages(os.getenv("PAGEINDEX_DROPPED_PAGES", "").strip())
+
+
+def original_page(trimmed_page: int) -> int:
+    """Map a page of the INDEXED (trimmed) PDF back to the published report.
+
+    trim_pdf.py drops pages in several places, not just the front, so a single
+    additive offset cannot be right for the whole document: content after a
+    mid-document drop needs a larger shift than content before it. The trimmed
+    file's page N is simply the Nth page that was *not* dropped, so we walk the
+    drop list and step over each removed page at or below the running position.
+
+    Falls back to the flat PAGEINDEX_PAGE_OFFSET when no drop list is set.
+    """
+    drops = dropped_pages()
+    if not drops:
+        return trimmed_page + page_offset()
+    original = trimmed_page
+    for dropped in drops:  # sorted ascending
+        if dropped <= original:
+            original += 1
+        else:
+            break
+    return original
 
 
 def page_range(node: Node) -> tuple[int | None, int | None]:
@@ -98,14 +153,13 @@ def page_range(node: Node) -> tuple[int | None, int | None]:
 
 
 def page_label(node: Node) -> str:
-    """Page label in the ORIGINAL report's numbering (see page_offset)."""
+    """Page label in the ORIGINAL report's numbering (see original_page)."""
     start, end = page_range(node)
     if start is None:
         return "p?"
-    shift = page_offset()
-    start += shift
+    start = original_page(start)
     if end is not None:
-        end += shift
+        end = original_page(end)
     if end is None or end == start:
         return f"p{start}"
     return f"p{start}-{end}"

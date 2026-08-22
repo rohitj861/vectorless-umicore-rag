@@ -2,3 +2,4 @@ streamlit>=1.36
 openai>=1.40
 requests>=2.31
 python-dotenv>=1.0
+pypdf>=4.0        # trim_pdf.py only; unused by the app

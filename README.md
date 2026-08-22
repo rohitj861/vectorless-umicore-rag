@@ -59,24 +59,37 @@ analytical content — covers, the static contents page, a marketing spread, the
 ESRS cross-reference appendices and the glossary:
 
 ```powershell
-python trim_pdf.py --list   # show exactly what would be dropped
-python trim_pdf.py          # write 'Umicore Annual Report 2025 (trimmed).pdf'
+python trim_pdf.py --list "Umicore Annual Report 2025.pdf"   # show the plan
+python trim_pdf.py "Umicore Annual Report 2025.pdf"          # write the copy
 ```
 
 Everything analytical survives: all segment reviews, the full financial
 statements with notes F1–F43, the auditor's report, governance, the remuneration
 report, principal risks and the ESRS sustainability statements.
 
-**Page numbers shift — and are corrected automatically.** Trimming drops 5 pages
-before original p7, so everything after it sits 5 pages earlier in the indexed
-file. `PAGEINDEX_PAGE_OFFSET=5` adds that back, so **every page the app cites is
-the page in your published 220-page PDF**, not the trimmed one. Verified against
-the original's bookmarks: F18 Impairment is indexed at p97 and cited as p102,
-which is where it actually sits.
+**Page numbers shift — and are corrected automatically.** Trimming removes pages
+in three places, not just the front, so the shift is not constant: content before
+p200 sits 5 pages earlier in the indexed file, while content after the dropped
+ESRS appendices sits 10 pages earlier. A single additive offset therefore cannot
+be right for the whole document.
 
-Set `PAGEINDEX_PAGE_OFFSET=0` if you ever index the full untrimmed report
-(Standard plan: $30/mo, 10,000 active pages), which removes both the trimming
-and the offset.
+`PAGEINDEX_DROPPED_PAGES` instead records exactly which original pages were
+removed, and the app maps each indexed page back through that list — page N of
+the trimmed file is the Nth page that was *not* dropped. Every one of the 200
+indexed pages resolves to its true page in the published 220-page PDF (verified
+against the original's bookmarks: F18 Impairment is indexed at p97 and cites
+p102; 'About this report' is indexed at p195 and cites p205).
+
+Regenerate the value whenever you change `DROP_RANGES`:
+
+```powershell
+# prints the PAGEINDEX_DROPPED_PAGES line to paste
+python trim_pdf.py --list "Umicore Annual Report 2025.pdf"
+```
+
+Leave `PAGEINDEX_DROPPED_PAGES` empty if you ever index the full untrimmed report
+(Standard plan: $30/mo, 10,000 active pages), which removes both the trimming and
+the mapping.
 
 ### Model choice
 
@@ -104,7 +117,8 @@ Every setting lives in `.env` (see `.env.example`). Defaults in brackets.
 | `PAGEINDEX_DOC_ID` | Pre-selected document for the app. |
 | `PAGEINDEX_DEFAULT_PDF` | PDF the CLI scripts use when none is given. |
 | `PAGEINDEX_CACHE_DIR` | Where trees and the `doc_id` registry live [`cache`]. |
-| `PAGEINDEX_PAGE_OFFSET` | Added to every cited page so citations match the published report [`0`; **`5` here**]. |
+| `PAGEINDEX_DROPPED_PAGES` | Original pages removed by `trim_pdf.py`, e.g. `1-2,3,200-204` [empty]. Indexed pages are mapped back through this list so citations match the published report. Empty = use `PAGEINDEX_PAGE_OFFSET`. |
+| `PAGEINDEX_PAGE_OFFSET` | Flat fallback shift, used only when `PAGEINDEX_DROPPED_PAGES` is empty [`0`]. Correct only if every dropped page precedes all kept content. |
 | `PAGEINDEX_OUTLINE_CHAR_BUDGET` | Max outline chars shown to the search model [`120000`]. The full Umicore outline with summaries is ~79k, so all node summaries stay visible; lower it for small-context models. |
 | `PAGEINDEX_CONTEXT_CHAR_BUDGET` | Max node text sent to the answer model [`90000`], split evenly across selected nodes. |
 | `PAGEINDEX_ALLOW_UPLOAD` | `false` disables indexing in the UI [`true`]. |

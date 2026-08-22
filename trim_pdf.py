@@ -47,6 +47,18 @@ def dropped_pages() -> set[int]:
     return pages
 
 
+def dropped_pages_setting() -> str:
+    """The PAGEINDEX_DROPPED_PAGES value matching DROP_RANGES.
+
+    Citations are only correct if this exact list reaches the app, so it is
+    derived from DROP_RANGES rather than written out a second time by hand.
+    """
+    return ",".join(
+        f"{start}" if start == end else f"{start}-{end}"
+        for start, end, _ in sorted(DROP_RANGES)
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Trim the PDF under the page cap.")
     parser.add_argument("pdf", nargs="?", default=os.getenv("PAGEINDEX_DEFAULT_PDF"))
@@ -62,6 +74,16 @@ def main() -> int:
 
     reader = PdfReader(str(src))
     total = len(reader.pages)
+    if total <= args.limit:
+        print(f"! {src.name} already has {total} pages, at or under the "
+              f"{args.limit}-page cap - there is nothing to trim.")
+        print("  Trimming it again would drop a SECOND set of pages and silently")
+        print("  corrupt every page citation. Point this at the ORIGINAL report:")
+        print(f'    python trim_pdf.py "Umicore Annual Report 2025.pdf"')
+        print("  (PAGEINDEX_DEFAULT_PDF points at the trimmed copy, so the bare")
+        print("   command picks the wrong file.)")
+        return 1
+
     drop = dropped_pages()
     keep = [p for p in range(1, total + 1) if p not in drop]
 
@@ -82,7 +104,8 @@ def main() -> int:
         return 1
 
     if args.list:
-        print("\n(--list given, nothing written)")
+        print(f"\nsetting: PAGEINDEX_DROPPED_PAGES={dropped_pages_setting()}")
+        print("(--list given, nothing written)")
         return 0
 
     out = Path(args.out) if args.out else src.with_name(f"{src.stem} (trimmed).pdf")
@@ -94,6 +117,10 @@ def main() -> int:
 
     size_mb = out.stat().st_size / 1_048_576
     print(f"\nwrote: {out.name}  ({len(keep)} pages, {size_mb:.1f} MB)")
+    print(
+        "\nPut this in .env so answers cite the ORIGINAL report's pages:\n"
+        f"  PAGEINDEX_DROPPED_PAGES={dropped_pages_setting()}"
+    )
     print(f"\nNext:  python ingest.py \"{out.name}\"")
     return 0
 

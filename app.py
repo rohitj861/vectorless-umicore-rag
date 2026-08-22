@@ -77,6 +77,7 @@ def bridge_secrets() -> None:
         "PAGEINDEX_DEFAULT_PDF",
         "PAGEINDEX_DOC_ID",
         "PAGEINDEX_PAGE_OFFSET",
+        "PAGEINDEX_DROPPED_PAGES",
         "PAGEINDEX_OUTLINE_CHAR_BUDGET",
         "PAGEINDEX_CONTEXT_CHAR_BUDGET",
         "PAGEINDEX_ALLOW_UPLOAD",
@@ -155,10 +156,20 @@ def load_tree_cached(doc_id: str, _mtime: float) -> dict:
 
 
 def load_roots(doc_id: str) -> list[dict]:
-    client = PageIndexClient()
-    path = client.tree_path(doc_id)
-    mtime = path.stat().st_mtime if path.exists() else 0.0
-    payload = load_tree_cached(doc_id, mtime)
+    """Tree roots for a doc_id, or [] plus an on-page error.
+
+    The "paste a doc_id" box renders even with no PAGEINDEX_API_KEY, so this
+    runs before get_client() has had a chance to report the missing key. Left
+    unguarded it raised PageIndexError and Streamlit showed a raw traceback.
+    """
+    try:
+        client = PageIndexClient()
+        path = client.tree_path(doc_id)
+        mtime = path.stat().st_mtime if path.exists() else 0.0
+        payload = load_tree_cached(doc_id, mtime)
+    except PageIndexError as exc:
+        st.error(str(exc))
+        return []
     if payload.get("status") not in (None, "completed"):
         st.warning(f"Document {doc_id} is still `{payload.get('status')}`.")
         return []
